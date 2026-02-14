@@ -4,12 +4,15 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/tmdgusya/do-more/internal/config"
+	"github.com/tmdgusya/do-more/internal/loop"
 	"github.com/tmdgusya/do-more/internal/provider"
 )
 
@@ -19,14 +22,17 @@ var staticFiles embed.FS
 type Server struct {
 	mu          sync.Mutex
 	cfgPath     string
+	workDir     string
 	registry    *provider.ProviderRegistry
 	loopRunning bool
 	loopCancel  context.CancelFunc
+	loopWg      sync.WaitGroup
+	hub         *EventHub
 	mux         *http.ServeMux
 	httpServer  *http.Server
 }
 
-func NewServer(cfgPath string, registry *provider.ProviderRegistry) *Server {
+func NewServer(cfgPath string, workDir string, registry *provider.ProviderRegistry) *Server {
 	mux := http.NewServeMux()
 
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -37,7 +43,9 @@ func NewServer(cfgPath string, registry *provider.ProviderRegistry) *Server {
 
 	s := &Server{
 		cfgPath:  cfgPath,
+		workDir:  workDir,
 		registry: registry,
+		hub:      NewEventHub(),
 		mux:      mux,
 	}
 
@@ -47,6 +55,11 @@ func NewServer(cfgPath string, registry *provider.ProviderRegistry) *Server {
 	mux.HandleFunc("POST /api/tasks", s.handleCreateTask)
 	mux.HandleFunc("PUT /api/tasks/{id}", s.handleUpdateTask)
 	mux.HandleFunc("DELETE /api/tasks/{id}", s.handleDeleteTask)
+	mux.HandleFunc("GET /api/events", s.handleSSE)
+	mux.HandleFunc("POST /api/loop/start", s.handleLoopStart)
+	mux.HandleFunc("POST /api/loop/stop", s.handleLoopStop)
+	mux.HandleFunc("POST /api/loop/skip", s.handleLoopSkip)
+	mux.HandleFunc("GET /api/loop/status", s.handleLoopStatus)
 
 	return s
 }
@@ -75,6 +88,40 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+// Hub returns the server's EventHub for broadcasting events.
+func (s *Server) Hub() *EventHub {
+	return s.hub
+}
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	ch := s.hub.Subscribe()
+	defer s.hub.Unsubscribe(ch)
+
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", event.JSON())
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +310,160 @@ func nextTaskID(tasks []config.Task) string {
 		}
 	}
 	return strconv.Itoa(maxID + 1)
+}
+
+func (s *Server) handleLoopStart(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.loopRunning {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "loop already running")
+		return
+	}
+
+	cfg, err := config.LoadConfig(s.cfgPath)
+	if err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, "failed to load config")
+		return
+	}
+	if cfg.NextPendingTask() == nil {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "completed", "message": "no pending tasks"})
+		return
+	}
+	if cfg.MaxIterations < 1 {
+		s.mu.Unlock()
+		writeError(w, http.StatusBadRequest, "maxIterations must be >= 1")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.loopCancel = cancel
+	s.loopRunning = true
+	s.mu.Unlock()
+
+	s.hub.Broadcast(Event{
+		Type:      EventLoopStarted,
+		Data:      map[string]any{"provider": cfg.Provider},
+		Timestamp: time.Now(),
+	})
+
+	s.loopWg.Add(1)
+	go func() {
+		defer s.loopWg.Done()
+		logger := NewEventLogger(s.hub)
+		err := loop.RunLoop(ctx, s.cfgPath, cfg.Provider, s.registry, s.workDir, logger)
+
+		s.mu.Lock()
+		s.loopRunning = false
+		s.loopCancel = nil
+		s.mu.Unlock()
+
+		if err != nil {
+			s.hub.Broadcast(Event{
+				Type:      EventLoopError,
+				Data:      map[string]any{"error": err.Error()},
+				Timestamp: time.Now(),
+			})
+		} else {
+			s.hub.Broadcast(Event{
+				Type:      EventLoopCompleted,
+				Timestamp: time.Now(),
+			})
+		}
+	}()
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+}
+
+func (s *Server) handleLoopStop(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.loopCancel != nil {
+		s.loopCancel()
+		s.loopRunning = false
+		s.loopCancel = nil
+	}
+	s.mu.Unlock()
+
+	s.hub.Broadcast(Event{
+		Type:      EventLoopStopped,
+		Timestamp: time.Now(),
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (s *Server) handleLoopSkip(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if !s.loopRunning {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "no loop running")
+		return
+	}
+
+	cfg, err := config.LoadConfig(s.cfgPath)
+	if err != nil {
+		s.mu.Unlock()
+		writeError(w, http.StatusInternalServerError, "failed to load config")
+		return
+	}
+	for i := range cfg.Tasks {
+		if cfg.Tasks[i].Status == config.StatusInProgress {
+			cfg.Tasks[i].Status = config.StatusFailed
+			cfg.Tasks[i].Learnings += "\nSkipped by user via dashboard"
+
+			s.hub.Broadcast(Event{
+				Type:      EventTaskFailed,
+				TaskID:    cfg.Tasks[i].ID,
+				Data:      map[string]any{"reason": "skipped"},
+				Timestamp: time.Now(),
+			})
+			break
+		}
+	}
+	config.SaveConfig(s.cfgPath, cfg)
+
+	if s.loopCancel != nil {
+		s.loopCancel()
+	}
+	s.loopRunning = false
+	s.loopCancel = nil
+	s.mu.Unlock()
+
+	cfg2, _ := config.LoadConfig(s.cfgPath)
+	if cfg2 != nil && cfg2.NextPendingTask() != nil {
+		s.mu.Lock()
+		ctx, cancel := context.WithCancel(context.Background())
+		s.loopCancel = cancel
+		s.loopRunning = true
+		s.mu.Unlock()
+
+		s.loopWg.Add(1)
+		go func() {
+			defer s.loopWg.Done()
+			logger := NewEventLogger(s.hub)
+			err := loop.RunLoop(ctx, s.cfgPath, cfg2.Provider, s.registry, s.workDir, logger)
+			s.mu.Lock()
+			s.loopRunning = false
+			s.loopCancel = nil
+			s.mu.Unlock()
+			if err != nil {
+				s.hub.Broadcast(Event{Type: EventLoopError, Data: map[string]any{"error": err.Error()}, Timestamp: time.Now()})
+			} else {
+				s.hub.Broadcast(Event{Type: EventLoopCompleted, Timestamp: time.Now()})
+			}
+		}()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "skipped"})
+}
+
+func (s *Server) handleLoopStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	running := s.loopRunning
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"running": running})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

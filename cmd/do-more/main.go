@@ -179,7 +179,11 @@ func main() {
 				return fmt.Errorf("do-more.json not found. Run 'do-more init' first.")
 			}
 
-			srv := server.NewServer(cfgPath, registry)
+			workDir := filepath.Dir(cfgPath)
+			if !filepath.IsAbs(workDir) {
+				workDir = mustGetwd()
+			}
+			srv := server.NewServer(cfgPath, workDir, registry)
 
 			addr := fmt.Sprintf("localhost:%d", portFlag)
 			fmt.Printf("[do-more] Dashboard: http://%s\n", addr)
