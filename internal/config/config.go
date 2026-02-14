@@ -19,6 +19,7 @@ type Task struct {
 	Description string `json:"description"`
 	Status      string `json:"status"`
 	Learnings   string `json:"learnings"`
+	Provider    string `json:"provider,omitempty"`
 }
 
 type Config struct {
@@ -51,6 +52,13 @@ func SaveConfig(path string, cfg *Config) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	return nil
+}
+
+func (t *Task) EffectiveProvider(fallback string) string {
+	if t.Provider != "" {
+		return t.Provider
+	}
+	return fallback
 }
 
 func (c *Config) NextPendingTask() *Task {
