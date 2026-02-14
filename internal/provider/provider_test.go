@@ -53,3 +53,33 @@ func TestListProviders(t *testing.T) {
 		t.Fatalf("len(List()) = %d, want 2", len(names))
 	}
 }
+
+func TestFormatModelsWithConfigured(t *testing.T) {
+	available := []string{"claude", "kimi", "opencode"}
+	result := FormatModels(available, "claude")
+
+	expected := "  * claude (configured)\n  - kimi\n  - opencode\n"
+	if result != expected {
+		t.Errorf("FormatModels() =\n%q\nwant\n%q", result, expected)
+	}
+}
+
+func TestFormatModelsNoneConfigured(t *testing.T) {
+	available := []string{"claude", "kimi", "opencode"}
+	result := FormatModels(available, "")
+
+	expected := "  - claude\n  - kimi\n  - opencode\n"
+	if result != expected {
+		t.Errorf("FormatModels() =\n%q\nwant\n%q", result, expected)
+	}
+}
+
+func TestFormatModelsConfiguredNotInList(t *testing.T) {
+	available := []string{"claude", "kimi"}
+	result := FormatModels(available, "nonexistent")
+
+	expected := "  - claude\n  - kimi\n"
+	if result != expected {
+		t.Errorf("FormatModels() =\n%q\nwant\n%q", result, expected)
+	}
+}

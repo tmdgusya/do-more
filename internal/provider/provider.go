@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 )
 
 type Provider interface {
@@ -36,4 +38,16 @@ func (r *ProviderRegistry) List() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func FormatModels(available []string, configured string) string {
+	var b strings.Builder
+	for _, name := range available {
+		if name == configured {
+			fmt.Fprintf(&b, "  * %s (configured)\n", name)
+		} else {
+			fmt.Fprintf(&b, "  - %s\n", name)
+		}
+	}
+	return b.String()
 }
