@@ -26,12 +26,7 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	p, ok := registry.Get(providerName)
-	if !ok {
-		return fmt.Errorf("unknown provider: %q", providerName)
-	}
-
-	logger.Log("Starting with provider: %s", p.Name())
+	logger.Log("Starting with default provider: %s", providerName)
 
 	for {
 		task := cfg.NextPendingTask()
@@ -42,6 +37,19 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 		task.Status = config.StatusInProgress
 		if err := config.SaveConfig(cfgPath, cfg); err != nil {
 			return fmt.Errorf("saving config: %w", err)
+		}
+
+		// Resolve provider per-task
+		effectiveProvider := task.EffectiveProvider(providerName)
+		p, ok := registry.Get(effectiveProvider)
+		if !ok {
+			task.Status = config.StatusFailed
+			task.Learnings += fmt.Sprintf("\nUnknown provider: %q", effectiveProvider)
+			logger.Log("Task #%s: failed (unknown provider: %s)", task.ID, effectiveProvider)
+			if err := config.SaveConfig(cfgPath, cfg); err != nil {
+				return fmt.Errorf("saving config: %w", err)
+			}
+			continue
 		}
 
 		var gateOutput string
