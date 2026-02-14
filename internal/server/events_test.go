@@ -89,6 +89,16 @@ func TestEventLoggerParsing(t *testing.T) {
 	}{
 		{
 			name:     "loop started",
+			msg:      "Starting with default provider: claude",
+			wantType: EventLoopStarted,
+			checkFn: func(t *testing.T, e Event) {
+				if e.Data["provider"] != "claude" {
+					t.Errorf("provider = %v, want claude", e.Data["provider"])
+				}
+			},
+		},
+		{
+			name:     "loop started legacy",
 			msg:      "Starting with provider: claude",
 			wantType: EventLoopStarted,
 			checkFn: func(t *testing.T, e Event) {

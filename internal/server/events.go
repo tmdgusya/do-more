@@ -171,6 +171,14 @@ func parseLogMessage(msg string) Event {
 		}
 	}
 
+	if strings.HasPrefix(msg, "Starting with default provider: ") {
+		providerName := strings.TrimPrefix(msg, "Starting with default provider: ")
+		return Event{
+			Type: EventLoopStarted,
+			Data: map[string]any{"provider": providerName},
+		}
+	}
+
 	if strings.HasPrefix(msg, "Starting with provider: ") {
 		providerName := strings.TrimPrefix(msg, "Starting with provider: ")
 		return Event{
