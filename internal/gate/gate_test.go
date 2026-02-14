@@ -1,5 +1,4 @@
-// gate_test.go
-package main
+package gate
 
 import (
 	"context"

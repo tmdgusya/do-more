@@ -1,5 +1,4 @@
-// config_test.go
-package main
+package config
 
 import (
 	"os"

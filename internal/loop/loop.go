@@ -1,9 +1,13 @@
-// loop.go
-package main
+package loop
 
 import (
 	"context"
 	"fmt"
+
+	"github.com/tmdgusya/do-more/internal/config"
+	"github.com/tmdgusya/do-more/internal/gate"
+	"github.com/tmdgusya/do-more/internal/prompt"
+	"github.com/tmdgusya/do-more/internal/provider"
 )
 
 type Logger interface {
@@ -16,18 +20,18 @@ func (l *StdoutLogger) Log(format string, args ...any) {
 	fmt.Printf("[do-more] "+format+"\n", args...)
 }
 
-func RunLoop(ctx context.Context, cfgPath string, providerName string, registry *ProviderRegistry, workDir string, logger Logger) error {
-	cfg, err := LoadConfig(cfgPath)
+func RunLoop(ctx context.Context, cfgPath string, providerName string, registry *provider.ProviderRegistry, workDir string, logger Logger) error {
+	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	provider, ok := registry.Get(providerName)
+	p, ok := registry.Get(providerName)
 	if !ok {
 		return fmt.Errorf("unknown provider: %q", providerName)
 	}
 
-	logger.Log("Starting with provider: %s", provider.Name())
+	logger.Log("Starting with provider: %s", p.Name())
 
 	for {
 		task := cfg.NextPendingTask()
@@ -35,8 +39,8 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 			break
 		}
 
-		task.Status = StatusInProgress
-		if err := SaveConfig(cfgPath, cfg); err != nil {
+		task.Status = config.StatusInProgress
+		if err := config.SaveConfig(cfgPath, cfg); err != nil {
 			return fmt.Errorf("saving config: %w", err)
 		}
 
@@ -46,14 +50,14 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 		for iteration := 1; iteration <= cfg.MaxIterations; iteration++ {
 			logger.Log("── Iteration %d/%d ── Task #%s: %s", iteration, cfg.MaxIterations, task.ID, task.Title)
 
-			prompt := BuildPrompt(task, cfg.Gates, gateOutput)
+			pr := prompt.BuildPrompt(task, cfg.Gates, gateOutput)
 
-			logger.Log("Invoking %s...", provider.Name())
-			output, err := provider.Run(ctx, prompt, workDir)
+			logger.Log("Invoking %s...", p.Name())
+			output, err := p.Run(ctx, pr, workDir)
 			if err != nil {
 				logger.Log("Provider error: %v", err)
 				if iteration >= cfg.MaxIterations {
-					task.Status = StatusFailed
+					task.Status = config.StatusFailed
 					task.Learnings += fmt.Sprintf("\nFailed after %d iterations. Last error: %v", iteration, err)
 					break
 				}
@@ -63,7 +67,7 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 
 			logger.Log("Provider finished")
 
-			results, err := RunGates(ctx, cfg.Gates, workDir)
+			results, err := gate.RunGates(ctx, cfg.Gates, workDir)
 			if err != nil {
 				return fmt.Errorf("running gates: %w", err)
 			}
@@ -79,23 +83,23 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 			}
 
 			if allPassed {
-				task.Status = StatusDone
+				task.Status = config.StatusDone
 				completed = true
 				logger.Log("Task #%s: done", task.ID)
 				break
 			}
 
 			if iteration >= cfg.MaxIterations {
-				task.Status = StatusFailed
+				task.Status = config.StatusFailed
 				task.Learnings += fmt.Sprintf("\nFailed after %d iterations. Gates did not pass.", iteration)
 				logger.Log("Task #%s: failed (max iterations reached)", task.ID)
 				break
 			}
 
-			gateOutput = GateFailureSummary(results)
+			gateOutput = gate.GateFailureSummary(results)
 		}
 
-		if err := SaveConfig(cfgPath, cfg); err != nil {
+		if err := config.SaveConfig(cfgPath, cfg); err != nil {
 			return fmt.Errorf("saving config: %w", err)
 		}
 
@@ -107,9 +111,9 @@ func RunLoop(ctx context.Context, cfgPath string, providerName string, registry 
 	failed := 0
 	for _, t := range cfg.Tasks {
 		switch t.Status {
-		case StatusDone:
+		case config.StatusDone:
 			done++
-		case StatusFailed:
+		case config.StatusFailed:
 			failed++
 		}
 	}

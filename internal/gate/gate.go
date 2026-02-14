@@ -1,5 +1,4 @@
-// gate.go
-package main
+package gate
 
 import (
 	"context"

@@ -1,5 +1,4 @@
-// config.go
-package main
+package config
 
 import (
 	"encoding/json"

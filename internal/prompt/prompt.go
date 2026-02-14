@@ -1,12 +1,13 @@
-// prompt.go
-package main
+package prompt
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/tmdgusya/do-more/internal/config"
 )
 
-func BuildPrompt(task *Task, gates []string, gateOutput string) string {
+func BuildPrompt(task *config.Task, gates []string, gateOutput string) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "You are working on the following task:\n\n")

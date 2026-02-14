@@ -1,13 +1,14 @@
-// prompt_test.go
-package main
+package prompt
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/tmdgusya/do-more/internal/config"
 )
 
 func TestBuildPrompt(t *testing.T) {
-	task := &Task{
+	task := &config.Task{
 		Title:       "Add login endpoint",
 		Description: "Create POST /api/login",
 		Learnings:   "Use bcrypt for passwords",
@@ -31,7 +32,7 @@ func TestBuildPrompt(t *testing.T) {
 }
 
 func TestBuildPromptWithGateFailures(t *testing.T) {
-	task := &Task{
+	task := &config.Task{
 		Title:       "Fix tests",
 		Description: "Make tests pass",
 	}
@@ -46,7 +47,7 @@ func TestBuildPromptWithGateFailures(t *testing.T) {
 }
 
 func TestBuildPromptNoLearnings(t *testing.T) {
-	task := &Task{
+	task := &config.Task{
 		Title:       "New task",
 		Description: "Do something",
 		Learnings:   "",

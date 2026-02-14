@@ -1,5 +1,4 @@
-// provider_test.go
-package main
+package provider
 
 import (
 	"context"
