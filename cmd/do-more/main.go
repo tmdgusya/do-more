@@ -4,13 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tmdgusya/do-more/internal/config"
 	"github.com/tmdgusya/do-more/internal/loop"
 	"github.com/tmdgusya/do-more/internal/provider"
+	"github.com/tmdgusya/do-more/internal/server"
 )
 
 func defaultRegistry() *provider.ProviderRegistry {
@@ -162,7 +166,46 @@ func main() {
 	}
 	modelsCmd.Flags().StringVar(&modelsConfigFlag, "config", "do-more.json", "Path to config file")
 
-	rootCmd.AddCommand(initCmd, runCmd, statusCmd, providersCmd, modelsCmd)
+	// --- serve ---
+	var portFlag int
+	var serveConfigFlag string
+
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the dashboard server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfgPath := serveConfigFlag
+			if _, err := os.Stat(cfgPath); err != nil {
+				return fmt.Errorf("do-more.json not found. Run 'do-more init' first.")
+			}
+
+			srv := server.NewServer(cfgPath, registry)
+
+			addr := fmt.Sprintf("localhost:%d", portFlag)
+			fmt.Printf("[do-more] Dashboard: http://%s\n", addr)
+
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
+			errChan := make(chan error, 1)
+			go func() {
+				errChan <- srv.ListenAndServe(addr)
+			}()
+
+			select {
+			case err := <-errChan:
+				return err
+			case <-ctx.Done():
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer shutdownCancel()
+				return srv.Shutdown(shutdownCtx)
+			}
+		},
+	}
+	serveCmd.Flags().IntVar(&portFlag, "port", 8585, "Port to serve on")
+	serveCmd.Flags().StringVar(&serveConfigFlag, "config", "do-more.json", "Path to config file")
+
+	rootCmd.AddCommand(initCmd, runCmd, statusCmd, providersCmd, modelsCmd, serveCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
